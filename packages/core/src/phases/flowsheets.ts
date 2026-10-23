@@ -4,7 +4,7 @@ import { pyTruthy } from "./common";
 
 /** Date-cursor pages of up to 1000 readings; bound is a backstop (recorded). */
 const MAX_PAGES = 200;
-const FLOWSHEETS_REL = "structured/track-my-health/track-my-health__GetFlowsheets.json";
+export const FLOWSHEETS_REL = "structured/track-my-health/track-my-health__GetFlowsheets.json";
 
 /** phase_flowsheets: paginate every patient-tracked flowsheet's readings. */
 export async function flowsheets(ctx: PhaseCtx): Promise<void> {

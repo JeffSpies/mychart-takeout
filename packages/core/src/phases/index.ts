@@ -5,6 +5,7 @@ import { documents } from "./documents";
 export { OTHER_DOCUMENTS_LIST_KEY } from "./documents";
 export { extractAttachmentRef, fetchDcsBytes, type AttachmentRef } from "./dcs";
 import { flowsheets } from "./flowsheets";
+export { FLOWSHEETS_REL } from "./flowsheets";
 import { messages } from "./messages";
 export { folderTags, initialListState, listParams, mergeListState, type ListState } from "./messages";
 import { structured } from "./structured";
@@ -12,6 +13,7 @@ import { testResults } from "./testResults";
 import { visits } from "./visits";
 
 export type Phase = (ctx: PhaseCtx) => Promise<void>;
+export type PhaseName = keyof typeof phases;
 
 /**
  * Phase registry. (The salvage phase is CDP-only and lives in packages/cdp

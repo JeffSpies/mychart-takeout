@@ -70,7 +70,16 @@ in the `--out` dir — start with its `PATIENT_SUMMARY.md` and `README.md`.
 `export` flags: `--out DIR` · `--ccda` (standards C-CDA) · `--access-log` (opt-in) ·
 `--no-raw` (don't keep raw bodies) · `--only PHASE` (one of: structured,
 test-results, visits, messages, flowsheets, access-log, documents, ccda,
-salvage, report).
+salvage, report; repeatable).
+
+`--only` into an existing `--out` dir re-runs just those phases and keeps the
+rest of the export: `_manifest.json` / `GAPS.md` replace only the re-run
+phases' rows, `documents` and `flowsheets` take the lists they need from the
+earlier `structured` run, and `report` is rebuilt from the whole export on
+disk. E.g. once a slow C-CDA package is ready:
+`export --only ccda --only report --out export`. (Exports made before phase
+tagging have no per-phase rows to merge into; their GAPS.md then covers the
+re-run only.)
 
 ## What it captures
 

@@ -19,3 +19,4 @@ export {
   switchToSelf,
 } from "./proxy";
 export type { Subject } from "./proxy";
+export { manifestForRerun, readExportJson, seedPhaseInputs } from "./rerun";

@@ -15,6 +15,7 @@ import { startMockMyChart, type MockServer } from "../../../tools/mock-mychart/s
 
 const CHROMIUM = findChromium();
 import { FsSink } from "../src/fsSink";
+import { manifestForRerun, seedPhaseInputs } from "../src/rerun";
 import { salvage } from "../src/salvage";
 import { CdpSession } from "../src/session";
 import { snapshot } from "../src/snapshot";
@@ -95,13 +96,12 @@ beforeAll(async () => {
     log: () => {},
   });
 
-  // mirror apps/cli runExport order
-  await phases.structured(ctx);
-  await phases.testResults(ctx);
-  await phases.visits(ctx);
-  await phases.messages(ctx);
-  await phases.flowsheets(ctx);
-  await phases.ccda(ctx);
+  // mirror apps/cli runExport order (and its per-phase manifest tags)
+  for (const name of ["structured", "testResults", "visits", "messages", "flowsheets", "ccda"] as const) {
+    ctx.phase = name;
+    await phases[name](ctx);
+  }
+  ctx.phase = undefined;
   await snapshot(session.page, outDir, "final");
   salvage(outDir, session.origin);
   await ctx.store.saveJson("_manifest.json", ctx.manifest);
@@ -201,5 +201,54 @@ describe.skipIf(!CHROMIUM)("raw-CDP end-to-end export against mock MyChart", () 
     expect(manifest.record_counts.encounters).toBe(3);
     expect(manifest.record_counts.message_threads).toBe(2);
     expect(manifest.record_counts.test_result_orders).toBe(2);
+  });
+});
+
+describe.skipIf(!CHROMIUM)("partial re-run (--only) into the existing export", () => {
+  let rerunCtx: PhaseCtx;
+  let merged: ReturnType<typeof manifestForRerun>;
+  let missingInEmptyDir: ReturnType<typeof seedPhaseInputs>;
+
+  beforeAll(async () => {
+    // As apps/cli exportSubject does for `--only documents --only flowsheets`:
+    // neither list is fetched this run — both come from the export on disk.
+    const active = new Set(["documents", "flowsheets"]);
+    rerunCtx = makeCtx({ client: session!.client(), sink: new FsSink(outDir), timeZone: "UTC", log: () => {} });
+    expect(seedPhaseInputs(rerunCtx.store, outDir, active)).toEqual([]);
+    const empty = mkdtempSync(join(tmpdir(), "cdp-e2e-empty-"));
+    missingInEmptyDir = seedPhaseInputs(makeCtx({ client: session!.client(), sink: new FsSink(empty) }).store, empty, active);
+    rmSync(empty, { recursive: true, force: true });
+    for (const name of ["flowsheets", "documents"] as const) {
+      rerunCtx.phase = name;
+      await phases[name](rerunCtx);
+    }
+    merged = manifestForRerun(outDir, rerunCtx.manifest, active);
+  }, 120_000);
+
+  test("documents ran from the seeded list (it used to find no documents)", () => {
+    const docs = readdirSync(join(outDir, "documents/other"));
+    expect(docs.some((f) => f.endsWith("_detail.json"))).toBe(true);
+    expect(docs.some((f) => f.endsWith(".pdf"))).toBe(true);
+  });
+
+  test("flowsheets ran from the seeded list (it used to throw)", () => {
+    expect(rerunCtx.manifest.some((e) => e.phase === "flowsheets")).toBe(true);
+  });
+
+  test("manifest keeps the other phases' rows and replaces the re-run ones", () => {
+    expect(merged.merged).toBe(true);
+    const by = (p: string) => merged.manifest.filter((e) => e.phase === p).length;
+    expect(by("structured")).toBeGreaterThan(5);
+    expect(by("visits")).toBeGreaterThan(0);
+    expect(by("ccda")).toBe(1);
+    expect(by("flowsheets")).toBe(rerunCtx.manifest.filter((e) => e.phase === "flowsheets").length);
+    expect(by("documents")).toBe(rerunCtx.manifest.filter((e) => e.phase === "documents").length);
+  });
+
+  test("missing inputs are reported with the phase that makes them", () => {
+    expect(missingInEmptyDir.map((m) => [m.phase, m.from])).toEqual([
+      ["documents", "structured"],
+      ["flowsheets", "structured"],
+    ]);
   });
 });
