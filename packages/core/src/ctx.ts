@@ -49,6 +49,9 @@ export interface PhaseCtx {
   /** The user asked to stop the current long list and keep what's fetched.
    *  Not an abort: the run finishes normally; the list records `incomplete`. */
   stopRequested(): boolean;
+  /** Phase now running, set by the driver. rec() stamps it on each row so a
+   *  partial re-run can replace exactly that phase's rows (rerun.ts). */
+  phase?: string;
 }
 
 export interface MakeCtxOpts {
@@ -72,7 +75,7 @@ export function makeCtx(opts: MakeCtxOpts): PhaseCtx {
   const manifest: ManifestEntry[] = [];
   const signal = { aborted: false, reason: "" };
   const health = makeRunHealth(opts.runBudgetMs ?? 0);
-  return {
+  const ctx: PhaseCtx = {
     client: opts.client,
     mc: new Mc(opts.client, signal, { initialToken: opts.initialToken, health }),
     store: new ExportStore(opts.sink),
@@ -101,6 +104,7 @@ export function makeCtx(opts: MakeCtxOpts): PhaseCtx {
         bytes: res?.body.length ?? 0,
         note,
         ...(outcome ? { outcome } : {}),
+        ...(ctx.phase ? { phase: ctx.phase } : {}),
         ...extra,
       });
       log(`  ${ok ? "OK " : "!! "}${domain}/${endpoint} [${res?.status}] ${note}`);
@@ -108,4 +112,5 @@ export function makeCtx(opts: MakeCtxOpts): PhaseCtx {
     log,
     wait: (ms) => new Promise((r) => setTimeout(r, ms)),
   };
+  return ctx;
 }

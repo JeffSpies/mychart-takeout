@@ -29,7 +29,10 @@ import {
   discoverSubjects,
   FsSink,
   loadExportDirIntoStore,
+  manifestForRerun,
+  readExportJson,
   salvage,
+  seedPhaseInputs,
   snapshot,
   switchToSelf,
   switchToSubject,
@@ -75,6 +78,8 @@ interface ExportOpts {
   active: Set<string>;
   doSalvage: boolean;
   host: string;
+  /** `--only` run: re-run some phases into an existing export, keeping the rest. */
+  partial: boolean;
 }
 
 /** Export the CURRENTLY-ACTIVE patient context into `outDir`. */
@@ -84,15 +89,23 @@ async function exportSubject(session: CdpSession, outDir: string, o: ExportOpts)
     sink: new FsSink(outDir),
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   });
-  const phaseTimings: { phase: string; ms: number; abortedDuring: boolean }[] = [];
+  if (o.partial) {
+    for (const m of seedPhaseInputs(ctx.store, outDir, o.active)) {
+      console.log(`  !! ${m.phase} needs ${m.rel}, which isn't in ${outDir} — add --only ${m.from}`);
+    }
+  }
+  type Timing = { phase: string; ms: number; abortedDuring: boolean };
+  const phaseTimings: Timing[] = [];
   const run = async (name: string, phase: Phase): Promise<void> => {
     if (!o.active.has(name) || ctx.signal.aborted) return;
     const t0 = Date.now();
+    ctx.phase = name;
     try {
       await phase(ctx);
     } catch (e) {
       console.log(`  !! phase ${name} failed: ${e}`);
     } finally {
+      ctx.phase = undefined;
       phaseTimings.push({ phase: name, ms: Date.now() - t0, abortedDuring: ctx.signal.aborted });
     }
   };
@@ -106,8 +119,24 @@ async function exportSubject(session: CdpSession, outDir: string, o: ExportOpts)
   await run("ccda", phases.ccda);
   if (o.doSalvage && o.active.has("salvage")) salvage(outDir, session.origin);
 
-  await ctx.store.saveJson("_manifest.json", ctx.manifest);
-  const gaps = summarizeGaps(ctx.manifest, ctx.signal.aborted ? ctx.signal.reason : undefined);
+  // A partial run keeps the rest of the export's manifest (and timings), so
+  // GAPS.md still describes the whole export, not just the re-run phases.
+  let manifest = ctx.manifest;
+  let timings: Timing[] = phaseTimings;
+  if (o.partial) {
+    // Only phases that actually ran replace their old rows; one the run
+    // never reached (it stopped early) keeps its earlier results.
+    const rerun = new Set(phaseTimings.map((t) => t.phase));
+    const r = manifestForRerun(outDir, ctx.manifest, rerun);
+    manifest = r.manifest;
+    if (r.untagged) console.log("  (existing _manifest.json predates phase tags; GAPS.md covers this run only)");
+    const prior = readExportJson(outDir, "_diagnostics/run.json") as { phaseTimings?: Timing[] } | undefined;
+    if (r.merged && Array.isArray(prior?.phaseTimings)) {
+      timings = [...prior.phaseTimings.filter((t) => !rerun.has(t.phase)), ...phaseTimings];
+    }
+  }
+  await ctx.store.saveJson("_manifest.json", manifest);
+  const gaps = summarizeGaps(manifest, ctx.signal.aborted ? ctx.signal.reason : undefined);
   await ctx.store.saveJson("gaps.json", gaps);
   await ctx.store.saveText("GAPS.md", renderGapsMd(gaps));
   // Same self-evidencing exports as the in-page path (see browser main.ts) —
@@ -115,13 +144,17 @@ async function exportSubject(session: CdpSession, outDir: string, o: ExportOpts)
   await ctx.store.saveJson("_diagnostics/run.json", {
     build: "cli",
     page: { host: o.host },
-    phaseTimings,
+    phaseTimings: timings,
+    ...(o.partial ? { only: [...o.active] } : {}),
     stoppedEarly: ctx.signal.aborted ? ctx.signal.reason : null,
   });
   console.log(
     `  gaps: ${gaps.ok}/${gaps.attempted} ok, ${gaps.empty} empty, ${gaps.concerns.length} need attention`,
   );
   if (o.active.has("report")) {
+    // A partial run holds only the re-run phases in memory; build the report
+    // from the whole export on disk, as the `report --dir` command does.
+    if (o.partial) loadExportDirIntoStore(ctx.store, outDir);
     try {
       await buildReport(ctx.store, { today: today(), source: `Epic MyChart (${o.host})` });
     } catch (e) {
@@ -145,6 +178,7 @@ async function runExport(a: Args): Promise<void> {
     active: new Set(only.length ? only : defaults),
     doSalvage: true,
     host: "",
+    partial: only.length > 0,
   };
 
   const session = await CdpSession.connect({ out, captureBodies: !a.flags["no-raw"], matchUrl: a.opts.host });
